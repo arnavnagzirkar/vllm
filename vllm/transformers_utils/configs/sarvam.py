@@ -137,7 +137,9 @@ class SarvamMLAConfig(PretrainedConfig):
                                 if self.rope_parameters is not None else {})
 
         self.rope_parameters.setdefault(
-            "rope_theta", kwargs.pop("rope_theta", self.default_theta))
+            "rope_theta",
+            kwargs.pop("rope_theta",
+                       getattr(self, "rope_theta", self.default_theta)))
         self.standardize_rope_params()
         self.validate_rope()
 
