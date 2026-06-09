@@ -23,7 +23,28 @@ if TYPE_CHECKING:
 
 @dataclass
 class NixlKVConnectorStats(KVConnectorStats):
-    """Container for transfer performance metrics"""
+    """Container for NIXL KV cache transfer performance metrics.
+
+    Each TP rank records its own per-transfer telemetry via
+    ``record_transfer()``.  When multiple TP ranks are active, their stats
+    objects are merged by ``aggregate()``, which concatenates the raw
+    observation lists.  ``reduce()`` then computes summary statistics over
+    the *combined* pool, so every reported value reflects the behaviour
+    **across all TP ranks**, not a single rank:
+
+    - **Num successful transfers**: total count summed over all ranks.
+    - **Avg / P90 xfer time**: mean / 90th-percentile over all individual
+      rank-level transfer durations.
+    - **Avg / P90 post time**: same, but for the post-transfer notification
+      step.
+    - **Avg MB per transfer**: average bytes per individual rank-level
+      transfer (not the total bytes for one logical KV cache operation).
+    - **Throughput (MB/s)**: ``total_MB_all_ranks / total_time_all_ranks``,
+      equivalent to the average per-rank throughput, not aggregate system
+      throughput.
+    - **Avg number of descriptors**: mean descriptor count per rank-level
+      transfer.
+    """
 
     def __post_init__(self):
         if not self.data:
@@ -76,6 +97,8 @@ class NixlKVConnectorStats(KVConnectorStats):
         )
 
     def aggregate(self, other: KVConnectorStats) -> KVConnectorStats:
+        # Concatenate raw observations from all TP ranks so that reduce()
+        # operates over the combined pool.
         if not other.is_empty():
             for k, v in other.data.items():
                 accumulator = self.data[k]
@@ -104,17 +127,24 @@ class NixlKVConnectorStats(KVConnectorStats):
         # Convert to MB for CLI logging.
         mb = np.asarray(self.data["bytes_transferred"]) / 2**20
         descs = np.asarray(self.data["num_descriptors"], dtype=np.uint32)
+        # n is the total number of rank-level transfers (summed across all TP ranks).
         n = len(descs)
         assert n == self.num_successful_transfers
 
         total_mb = mb.sum()
+        # Average bytes per individual rank-level transfer; not total bytes
+        # for one logical KV cache operation.
         avg_mb = total_mb / n
 
+        # Throughput = total_MB_all_ranks / total_time_all_ranks.
+        # This is the average per-rank throughput, not aggregate system throughput.
         total_time_seconds = xfer_time.sum()
         throughput_mb_s = total_mb / total_time_seconds
 
         return {
+            # Total count summed across all TP ranks.
             "Num successful transfers": n,
+            # Mean / P90 over the combined distribution of all ranks' durations.
             "Avg xfer time (ms)": round(xfer_time.mean() * 1e3, 3),
             "P90 xfer time (ms)": round(np.percentile(xfer_time, 90).item() * 1e3, 3),
             "Avg post time (ms)": round(post_time.mean() * 1e3, 3),

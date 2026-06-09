@@ -51,6 +51,28 @@ class KVConnectorStats:
 
 
 class KVConnectorLogging:
+    """Accumulates KV connector stats and logs a summary on a fixed interval.
+
+    Pipeline (called from the scheduler / engine process):
+
+    1. ``observe(transfer_stats_data)`` - called each time workers sync stats
+       with the scheduler.  ``transfer_stats_data`` is already aggregated
+       across all TP workers before it arrives here (workers send their stats
+       to a single collector which merges them).  Each call builds a
+       connector-specific ``KVConnectorStats`` object and merges it into the
+       running accumulator via ``KVConnectorStats.aggregate()``.
+
+    2. ``log()`` - called on the logging interval.  It invokes
+       ``KVConnectorStats.reduce()`` on the accumulator to produce a compact
+       summary dict (averages, percentiles, totals), formats it as a
+       comma-separated string, and writes it to the logger.  The accumulator
+       is then reset for the next interval.
+
+    Because ``transfer_stats_data`` is pre-aggregated across TP workers, every
+    value produced by ``reduce()`` and printed by ``log()`` reflects the
+    combined behaviour of all ranks, not a single rank.
+    """
+
     def __init__(self, kv_transfer_config: KVTransferConfig | None):
         # Instantiate the connector's stats class.
         if kv_transfer_config and kv_transfer_config.kv_connector:
@@ -67,8 +89,9 @@ class KVConnectorLogging:
         assert self.connector_cls is not None
         # Called periodically when connector syncs with the scheduler.
         # Note that this is not the same as the logging interval.
-        # We expect transfer_stats_data to be aggregated across all workers and
-        # consist of observations from a single connector or a MultiConnector.
+        # transfer_stats_data is pre-aggregated across all TP workers
+        # (each worker sends its stats to a single collector that merges them
+        # before forwarding here), so this object covers all ranks.
         transfer_stats = self.connector_cls.build_kv_connector_stats(
             transfer_stats_data
         )

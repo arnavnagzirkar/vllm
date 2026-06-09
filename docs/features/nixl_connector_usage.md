@@ -398,6 +398,36 @@ To enable this feature:
 --kv-transfer-config '{..., "kv_connector_extra_config": {"enable_cross_layers_blocks": "True"}}'
 ```
 
+## Monitoring: KV Transfer Metrics
+
+vLLM periodically logs a `KV Transfer metrics` line that summarises NIXL transfer activity for the last interval:
+
+```
+KV Transfer metrics: Num successful transfers=4, Avg xfer time (ms)=1.381, P90 xfer time (ms)=2.601, Avg post time (ms)=0.672, P90 post time (ms)=0.801, Avg MB per transfer=2.25, Throughput (MB/s)=1629.549, Avg number of descriptors=72.0
+```
+
+### Aggregation semantics
+
+When running with tensor parallelism (TP > 1), each TP rank records its own per-transfer telemetry independently.  Before these metrics are summarised, all ranks' observations are **concatenated** into a single pool.  The values printed therefore reflect the combined behaviour of all ranks, not any single rank:
+
+| Field | Meaning |
+|-------|---------|
+| **Num successful transfers** | Total count summed across all TP ranks. |
+| **Avg xfer time (ms)** | Mean transfer duration over all individual rank-level transfers. |
+| **P90 xfer time (ms)** | 90th-percentile transfer duration over the combined distribution of all ranks. |
+| **Avg post time (ms)** | Mean post-transfer notification duration, same aggregation as above. |
+| **P90 post time (ms)** | 90th-percentile post-transfer notification duration. |
+| **Avg MB per transfer** | Average bytes per individual rank-level transfer. This is *not* the total bytes for one logical KV cache operation. |
+| **Throughput (MB/s)** | `total_MB_all_ranks / total_time_all_ranks` - the average per-rank throughput, not aggregate system throughput. |
+| **Avg number of descriptors** | Mean NIXL descriptor count per rank-level transfer. |
+
+!!! note
+    For a TP=N deployment, **Num successful transfers** is approximately N times what you would see with TP=1 for the same request load. **Throughput (MB/s)** represents average per-rank throughput; multiply by N to estimate the aggregate system throughput.
+
+### Prometheus metrics
+
+The same underlying observations are also exported as Prometheus histograms and counters (prefix `vllm:nixl_`) so you can build dashboards and alerts without relying on the log line.
+
 ## Example Scripts/Code
 
 Refer to these example scripts in the vLLM repository:
