@@ -9,7 +9,11 @@ import torch.nn as nn
 import vllm.envs as envs
 from vllm.config import CacheConfig, get_current_vllm_config
 from vllm.config.vllm import VllmConfig
-from vllm.forward_context import ForwardContext, get_forward_context
+from vllm.forward_context import (
+    ForwardContext,
+    get_forward_context,
+    is_forward_context_available,
+)
 from vllm.logger import init_logger
 from vllm.model_executor.layers.attention.kv_transfer_utils import (
     maybe_transfer_kv_layer,
@@ -25,6 +29,7 @@ from vllm.model_executor.layers.quantization.kv_cache import BaseKVCacheMethod
 from vllm.model_executor.layers.quantization.utils.quant_utils import GroupShape
 from vllm.platforms import current_platform
 from vllm.utils.torch_utils import (
+    _USE_LAYERNAME,
     LayerNameType,
     _encode_layer_name,
     _resolve_layer_name,
@@ -406,6 +411,15 @@ class Attention(nn.Module, AttentionLayerBase):
             )
         self.kv_sharing_target_layer_name = kv_sharing_target_layer_name
 
+        # Track layers that will call unified_kv_cache_update for the
+        # fast_attn_cold_start optimization (counter-based sentinel approach).
+        if (
+            not self.use_direct_call
+            and not self.attn_backend.forward_includes_kv_cache_update
+            and kv_sharing_target_layer_name is None
+        ):
+            compilation_config.static_all_attn_layers.append(prefix)
+
         # use a placeholder kv cache tensor during init, which will be replaced
         # by bind_kv_cache
         # this variable will not be accessed if use_direct_call is True
@@ -433,6 +447,24 @@ class Attention(nn.Module, AttentionLayerBase):
                 if is_per_head
                 else GroupShape.PER_TENSOR,
             )
+
+    def _encode_kv_cache_update_layer_name(self) -> "str | LayerNameType":
+        """Return the layer name to use as the unified_kv_cache_update arg.
+
+        When the fast_attn_cold_start optimization is active (and LayerName
+        hoisting is not available), return the sentinel "from_forward_context"
+        so that all attention layers share a single compiled graph.  The
+        sentinel is resolved to the real layer name at runtime via a counter
+        stored on the ForwardContext.
+        """
+        if _USE_LAYERNAME:
+            return _encode_layer_name(self.layer_name)
+        if (
+            is_forward_context_available()
+            and get_forward_context().all_attn_layers is not None
+        ):
+            return "from_forward_context"
+        return self.layer_name
 
     def forward(
         self,
@@ -516,7 +548,7 @@ class Attention(nn.Module, AttentionLayerBase):
                 and value is not None
             ):
                 kv_cache_dummy_dep = torch.ops.vllm.unified_kv_cache_update(
-                    key, value, encoded
+                    key, value, self._encode_kv_cache_update_layer_name()
                 )
             torch.ops.vllm.unified_attention_with_output(
                 query,
@@ -698,6 +730,18 @@ def unified_kv_cache_update(
     the data dependency between them to ensure torch.compile preserves ordering.
     """
     layer_name = _resolve_layer_name(layer_name)
+    if not _USE_LAYERNAME and layer_name == "from_forward_context":
+        forward_context = get_forward_context()
+        all_attn_layers = forward_context.all_attn_layers
+        assert all_attn_layers is not None
+        attn_layer_index = forward_context.attn_layer_index
+        if attn_layer_index >= len(all_attn_layers):
+            raise AssertionError(
+                "We expected the number of attention layers in `all_attn_layers` "
+                "to be equal to the number of unified_kv_cache_update calls."
+            )
+        layer_name = all_attn_layers[attn_layer_index]
+        forward_context.attn_layer_index += 1
     _, attn_layer, kv_cache, layer_slot_mapping = get_attention_context(layer_name)
     if layer_slot_mapping is not None:
         assert hasattr(attn_layer.impl, "do_kv_cache_update"), (

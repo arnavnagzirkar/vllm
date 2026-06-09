@@ -177,6 +177,9 @@ class ForwardContext:
     all_moe_layers: list[str] | None = None
     moe_layer_index: int = 0
 
+    all_attn_layers: list[str] | None = None
+    attn_layer_index: int = 0
+
     additional_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -217,9 +220,15 @@ def create_forward_context(
     else:
         all_moe_layers = None
 
+    if vllm_config.compilation_config.fast_attn_cold_start:
+        all_attn_layers = vllm_config.compilation_config.static_all_attn_layers
+    else:
+        all_attn_layers = None
+
     return ForwardContext(
         no_compile_layers=vllm_config.compilation_config.static_forward_context,
         all_moe_layers=all_moe_layers,
+        all_attn_layers=all_attn_layers,
         attn_metadata=attn_metadata,
         slot_mapping=slot_mapping or {},
         dp_metadata=dp_metadata,

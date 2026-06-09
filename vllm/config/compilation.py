@@ -747,8 +747,38 @@ class CompilationConfig:
     Map from layer name to layer objects that need to be accessed outside
     model code, e.g., Attention, FusedMOE when dp_size>1."""
 
+    fast_attn_cold_start: bool | None = None
+    """Optimization for fast attention cold start.
+
+    This is a bit of a hack that assumes that:
+    1. the only decoder forward pass being run is the current model
+    2. the decoder forward pass runs all of the attention layers (that call
+       unified_kv_cache_update) in the order in which they are initialized
+
+    When the above two conditions hold, this option greatly decreases cold
+    start time by allowing piecewise compiled regions to share a single
+    compiled graph across all attention layers.
+
+    The options are:
+    - True: optimization is always on
+    - False: optimization is always off
+    - None: optimization is on usually but off for speculative decoding
+
+    If conditions 1&2 don't hold then this option will lead to silent
+    incorrectness. The only condition in which this doesn't hold is
+    speculative decoding, where there is a draft model that may also have
+    attention layers.
+
+    NB: We're working on a longer-term solution that doesn't need these
+    assumptions.
+    """
+
     static_all_moe_layers: list[str] = field(default_factory=list, init=False)
     """The names of all the MOE layers in the model
+    """
+
+    static_all_attn_layers: list[str] = field(default_factory=list, init=False)
+    """The names of all attention layers that call unified_kv_cache_update.
     """
 
     # Attention ops; used for piecewise cudagraphs
@@ -1129,10 +1159,11 @@ class CompilationConfig:
                 # list via reference.
                 self.splitting_ops = list(self._attention_ops)
 
-                # unified_kv_cache_update has a string param that prevents Inductor
-                # from reusing piecewise graphs. Remove it from the compiled graph.
-                # This has the side-effect of excluding cache from cudagraphs but
-                # that doesn't seem to affect performance.
+                # When use_inductor_graph_partition is off, unified_kv_cache_update
+                # still needs to be a splitting op because Inductor cannot reuse
+                # piecewise graphs that differ only in a string constant.  The
+                # fast_attn_cold_start optimization (see ForwardContext) addresses
+                # this for the use_inductor_graph_partition=True path.
                 # https://github.com/vllm-project/vllm/issues/33267
                 if not self.use_inductor_graph_partition:
                     if self.pass_config.fuse_rope_kvcache:
