@@ -758,6 +758,28 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
     def set_workspace_buffer(self, workspace_buffer: torch.Tensor):
         self._workspace_buffer = workspace_buffer
 
+    def reinitialize_after_wake_up(self) -> None:
+        """Reset FlashInfer workspace state after waking from sleep mode.
+
+        The workspace buffer is allocated in the kv_cache memory pool.
+        After sleep/wake_up its physical memory is discarded and remapped
+        to fresh (garbage) memory.  For CUDA graph decode, fast_decode_plan
+        skips workspace re-initialization and relies on workspace data that
+        was written by a prior full plan() call.  If that prior data is now
+        garbage the attention kernels produce wrong outputs.
+
+        Zeroing the workspace and resetting vllm_first_call forces the next
+        build() call to run a full plan(), which properly re-initializes the
+        workspace before any CUDA kernel reads from it.
+        """
+        if self._workspace_buffer is not None:
+            self._workspace_buffer.zero_()
+        if self._decode_wrapper is not None:
+            self._decode_wrapper.vllm_first_call = True
+        if self.enable_cuda_graph:
+            for wrapper in self._decode_wrappers_cudagraph.values():
+                wrapper.vllm_first_call = True
+
     def _get_prefill_wrapper(
         self,
     ) -> BatchPrefillWithPagedKVCacheWrapper | BatchDCPPrefillWrapper:

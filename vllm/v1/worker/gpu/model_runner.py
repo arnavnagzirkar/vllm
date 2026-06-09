@@ -603,6 +603,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
     def post_kv_cache_wake_up(self) -> None:
         self.block_tables.init_block_table_layout_tensors()
+        for groups in self.attn_groups:
+            for group in groups:
+                for builder in group.metadata_builders:
+                    if hasattr(builder, "reinitialize_after_wake_up"):
+                        builder.reinitialize_after_wake_up()
 
     def reset_mm_cache(self) -> None:
         if self.encoder_cache is not None:

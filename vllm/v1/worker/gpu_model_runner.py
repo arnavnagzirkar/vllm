@@ -926,6 +926,10 @@ class GPUModelRunner(
 
     def post_kv_cache_wake_up(self) -> None:
         self.init_fp8_kv_scales()
+        for group in self._attn_group_iterator():
+            for builder in group.metadata_builders:
+                if hasattr(builder, "reinitialize_after_wake_up"):
+                    builder.reinitialize_after_wake_up()
 
     @torch.inference_mode()
     def init_fp8_kv_scales(self) -> None:
