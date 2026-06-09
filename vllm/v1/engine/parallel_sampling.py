@@ -41,9 +41,11 @@ class ParentRequest:
         self.sampling_params = sampling_params
 
         self.child_requests = set()
+        # FINAL_ONLY and CUMULATIVE both need per-child output tracking.
+        # DELTA only needs the streaming pass-through (empty list sentinel).
         self.output_aggregator = (
             [cast(CompletionOutput, None)] * sampling_params.n
-            if (sampling_params.output_kind == RequestOutputKind.FINAL_ONLY)
+            if sampling_params.output_kind != RequestOutputKind.DELTA
             else []
         )
         self.max_num_generation_tokens = 0
@@ -112,15 +114,24 @@ class ParentRequest:
                 # batch step and returned to the client earlier
                 already_finished_and_returned = True
 
-        if self.sampling_params.output_kind != RequestOutputKind.FINAL_ONLY:
-            # If streaming, just return the current output
-            #
-            # DO NOT output finished and already returned child request to client again
-            outputs = [] if already_finished_and_returned else [completion_output]
-        else:
-            # If not streaming, aggregate the n final outputs.
+        output_kind = self.sampling_params.output_kind
+        if output_kind == RequestOutputKind.FINAL_ONLY:
+            # Aggregate all n final outputs; return only when all children finish.
             self.output_aggregator[completion_output.index] = completion_output
             outputs = [] if self.child_requests else self.output_aggregator
+        elif output_kind == RequestOutputKind.CUMULATIVE:
+            # Track each child's latest cumulative output. Return all known
+            # outputs together so callers always see a consistent n-completion
+            # view. Skip updates for children that already finished and returned.
+            if not already_finished_and_returned:
+                self.output_aggregator[completion_output.index] = completion_output
+                outputs = [o for o in self.output_aggregator if o is not None]
+            else:
+                outputs = []
+        else:
+            # DELTA: pass each child's delta through individually.
+            # process_outputs merges same-step deltas for LLMEngine callers.
+            outputs = [] if already_finished_and_returned else [completion_output]
 
         finished = not self.child_requests
         return outputs, finished

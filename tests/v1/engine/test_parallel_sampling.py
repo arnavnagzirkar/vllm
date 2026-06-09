@@ -17,9 +17,59 @@ def test_parent_request_to_output_stream() -> None:
     output_1 = CompletionOutput(
         index=1, text="child 1", token_ids=[], cumulative_logprob=None, logprobs=None
     )
-    # Request not finished
+    # Only child_id_0 in aggregator yet
     assert ([output_0], False) == parent_request.get_outputs("child_id_0", output_0)
-    assert ([output_1], False) == parent_request.get_outputs("child_id_1", output_1)
+    # Both children in aggregator - returns both
+    assert ([output_0, output_1], False) == parent_request.get_outputs(
+        "child_id_1", output_1
+    )
+    # Both in aggregator on subsequent updates
+    assert ([output_0, output_1], False) == parent_request.get_outputs(
+        "child_id_0", output_0
+    )
+    assert ([output_0, output_1], False) == parent_request.get_outputs(
+        "child_id_1", output_1
+    )
+
+    # output_1 finished
+    output_1.finish_reason = "ended"
+    assert ([output_0, output_1], False) == parent_request.get_outputs(
+        "child_id_0", output_0
+    )
+    # child_id_1 finish is recorded, both outputs returned
+    assert ([output_0, output_1], False) == parent_request.get_outputs(
+        "child_id_1", output_1
+    )
+    # Finished output_1 had already returned, DO NOT return again
+    assert ([output_0, output_1], False) == parent_request.get_outputs(
+        "child_id_0", output_0
+    )
+    assert parent_request.get_outputs("child_id_1", output_1) == ([], False)
+
+    # output_0 finished (last child) - returns both completions, finished=True
+    output_0.finish_reason = "ended"
+    assert ([output_0, output_1], True) == parent_request.get_outputs(
+        "child_id_0", output_0
+    )
+    assert parent_request.get_outputs("child_id_1", output_1) == ([], True)
+    # Finished output_0 had already returned, DO NOT return again
+    assert parent_request.get_outputs("child_id_0", output_0) == ([], True)
+    assert parent_request.get_outputs("child_id_1", output_1) == ([], True)
+
+
+def test_parent_request_to_output_delta() -> None:
+    """DELTA mode: each child passes its own delta through individually."""
+    parent_request = ParentRequest(
+        make_request(SamplingParams(n=2, output_kind=RequestOutputKind.DELTA))
+    )
+    parent_request.child_requests = {"child_id_0", "child_id_1"}
+    output_0 = CompletionOutput(
+        index=0, text="+A", token_ids=[], cumulative_logprob=None, logprobs=None
+    )
+    output_1 = CompletionOutput(
+        index=1, text="+X", token_ids=[], cumulative_logprob=None, logprobs=None
+    )
+    # Each child returns only its own delta
     assert ([output_0], False) == parent_request.get_outputs("child_id_0", output_0)
     assert ([output_1], False) == parent_request.get_outputs("child_id_1", output_1)
 
@@ -27,15 +77,14 @@ def test_parent_request_to_output_stream() -> None:
     output_1.finish_reason = "ended"
     assert ([output_0], False) == parent_request.get_outputs("child_id_0", output_0)
     assert ([output_1], False) == parent_request.get_outputs("child_id_1", output_1)
-    # Finished output_1 had already returned, DO NOT returned again
+    # Finished output_1 already returned, DO NOT return again
     assert ([output_0], False) == parent_request.get_outputs("child_id_0", output_0)
     assert parent_request.get_outputs("child_id_1", output_1) == ([], False)
 
-    # output_0 finished
+    # output_0 finished (last child)
     output_0.finish_reason = "ended"
     assert ([output_0], True) == parent_request.get_outputs("child_id_0", output_0)
     assert parent_request.get_outputs("child_id_1", output_1) == ([], True)
-    # Finished output_0 had already returned, DO NOT returned again
     assert parent_request.get_outputs("child_id_0", output_0) == ([], True)
     assert parent_request.get_outputs("child_id_1", output_1) == ([], True)
 

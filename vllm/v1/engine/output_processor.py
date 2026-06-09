@@ -601,7 +601,11 @@ class OutputProcessor:
         within the loop below.
         """
 
-        request_outputs: list[RequestOutput | PoolingRequestOutput] = []
+        # Use a dict to merge outputs with the same request_id for LLMEngine.
+        # This handles parallel sampling (n>1) where CUMULATIVE and DELTA child
+        # requests share a single external request ID and must be collapsed into
+        # one RequestOutput per step before returning to the caller.
+        request_outputs_map: dict[str, RequestOutput | PoolingRequestOutput] = {}
         reqs_to_abort: list[str] = []
         for engine_core_output in engine_core_outputs:
             req_id = engine_core_output.request_id
@@ -662,8 +666,18 @@ class OutputProcessor:
                     # AsyncLLM: put into queue for handling by generate().
                     req_state.queue.put(request_output)
                 else:
-                    # LLMEngine: return list of RequestOutputs.
-                    request_outputs.append(request_output)
+                    # LLMEngine: merge into per-request-id slot so callers
+                    # receive at most one RequestOutput per request per step.
+                    out_id = request_output.request_id
+                    if out_id in request_outputs_map:
+                        existing = request_outputs_map[out_id]
+                        if isinstance(existing, RequestOutput) and isinstance(
+                            request_output, RequestOutput
+                        ):
+                            aggregate = req_state.output_kind == RequestOutputKind.DELTA
+                            existing.add(request_output, aggregate=aggregate)
+                    else:
+                        request_outputs_map[out_id] = request_output
 
             # Free completed requests.
             if finish_reason is not None:
@@ -688,7 +702,7 @@ class OutputProcessor:
                         self.do_tracing(engine_core_output, req_state, iteration_stats)
 
         return OutputProcessorOutput(
-            request_outputs=request_outputs,
+            request_outputs=list(request_outputs_map.values()),
             reqs_to_abort=reqs_to_abort,
         )
 

@@ -333,6 +333,77 @@ async def test_finished_flag(
 
 
 @pytest.mark.parametrize(
+    "output_kind",
+    [
+        RequestOutputKind.CUMULATIVE,
+        RequestOutputKind.DELTA,
+        RequestOutputKind.FINAL_ONLY,
+    ],
+)
+@pytest.mark.asyncio
+async def test_parallel_sampling_output_kinds(output_kind: RequestOutputKind):
+    """Test AsyncLLM.generate() with n>1 for all output_kinds.
+
+    Verifies:
+    - The generator yields the expected total token count.
+    - The final output has finished=True with exactly n completions.
+    - All intermediate outputs have finished=False.
+    """
+    with ExitStack() as after:
+        with set_default_torch_num_threads(1):
+            engine = AsyncLLM.from_engine_args(TEXT_ENGINE_ARGS)
+        after.callback(engine.shutdown)
+
+        n = 3
+        max_tokens = 10
+        sampling_params = SamplingParams(
+            max_tokens=max_tokens,
+            ignore_eos=True,
+            output_kind=output_kind,
+            temperature=1.0,
+            seed=42,
+            n=n,
+        )
+
+        outputs = [
+            out
+            async for out in engine.generate(
+                request_id="req-parallel-kinds",
+                prompt=TEXT_PROMPT,
+                sampling_params=sampling_params,
+            )
+        ]
+
+        assert outputs, "No outputs received"
+        # Only the last output must be finished.
+        assert all(not out.finished for out in outputs[:-1])
+        assert outputs[-1].finished
+
+        final = outputs[-1]
+        assert len(final.outputs) == n, (
+            f"Expected {n} completions in final output, got {len(final.outputs)}"
+        )
+
+        if output_kind in (RequestOutputKind.CUMULATIVE, RequestOutputKind.FINAL_ONLY):
+            # Final output carries the full accumulated text for every completion.
+            for completion in final.outputs:
+                assert len(completion.token_ids) == max_tokens
+        else:
+            # DELTA: accumulate token counts across all outputs per index.
+            token_counts: dict[int, int] = {i: 0 for i in range(n)}
+            for out in outputs:
+                for completion in out.outputs:
+                    token_counts[completion.index] += len(completion.token_ids)
+            for idx, count in token_counts.items():
+                assert count == max_tokens, (
+                    f"Completion {idx}: accumulated {count} tokens, "
+                    f"expected {max_tokens}"
+                )
+
+        assert not engine.output_processor.has_unfinished_requests()
+
+
+@pytest.mark.parametrize(
     "engine_args,prompt",
     [(TEXT_ENGINE_ARGS, TEXT_PROMPT), (VISION_ENGINE_ARGS, VISION_PROMPT)],
 )

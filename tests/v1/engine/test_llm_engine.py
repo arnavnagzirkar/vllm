@@ -6,7 +6,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from vllm import LLM
-from vllm.sampling_params import SamplingParams, StructuredOutputsParams
+from vllm.sampling_params import (
+    RequestOutputKind,
+    SamplingParams,
+    StructuredOutputsParams,
+)
+from vllm.v1.engine.llm_engine import LLMEngine
 from vllm.v1.metrics.reader import Counter, Gauge, Histogram, Metric, Vector
 
 if TYPE_CHECKING:
@@ -147,6 +152,82 @@ def test_parallel_sampling(vllm_model, example_prompts) -> None:
             raise AssertionError(
                 f"{len(completion_counts)} unique completions; expected"
                 f" {n}. Repeats: {repeats}"
+            )
+
+
+@pytest.mark.parametrize(
+    "output_kind",
+    [
+        RequestOutputKind.CUMULATIVE,
+        RequestOutputKind.DELTA,
+        RequestOutputKind.FINAL_ONLY,
+    ],
+)
+def test_parallel_sampling_llm_engine_step(vllm_model, output_kind) -> None:
+    """Test LLMEngine.add_request() / step() with n>1 for all output_kinds.
+
+    Verifies:
+    - Each step returns at most one RequestOutput per request ID.
+    - The final (finished=True) output contains exactly n completions.
+    - Token counts are consistent with max_tokens and output_kind semantics.
+    """
+    engine: LLMEngine = vllm_model.llm.llm_engine
+    n = 3
+    max_tokens = 8
+    prompt = "Hello, my name is"
+
+    params = SamplingParams(
+        n=n,
+        temperature=1.0,
+        seed=42,
+        max_tokens=max_tokens,
+        ignore_eos=True,
+        output_kind=output_kind,
+    )
+    req_id = engine.add_request("req-parallel", prompt, params)
+
+    final_output = None
+    # For DELTA: accumulate token counts per completion index.
+    delta_token_counts: dict[int, int] = {i: 0 for i in range(n)}
+
+    while engine.has_unfinished_requests():
+        step_outputs = engine.step()
+
+        # Each step must return at most one output per request ID.
+        req_ids_this_step = [o.request_id for o in step_outputs]
+        assert len(req_ids_this_step) == len(set(req_ids_this_step)), (
+            "Duplicate request_id in single step() output"
+        )
+
+        for output in step_outputs:
+            assert output.request_id == req_id
+            # Never more completions than requested.
+            assert len(output.outputs) <= n
+
+            if output_kind == RequestOutputKind.DELTA:
+                for completion in output.outputs:
+                    delta_token_counts[completion.index] += len(completion.token_ids)
+
+            if output.finished:
+                final_output = output
+
+    assert final_output is not None, "Request never finished"
+    assert len(final_output.outputs) == n, (
+        f"Expected {n} completions, got {len(final_output.outputs)}"
+    )
+
+    # Validate per completion index and token counts.
+    for i, completion in enumerate(final_output.outputs):
+        assert completion.index == i
+
+    if output_kind in (RequestOutputKind.FINAL_ONLY, RequestOutputKind.CUMULATIVE):
+        for completion in final_output.outputs:
+            assert len(completion.token_ids) == max_tokens
+    else:
+        # DELTA: accumulated counts must equal max_tokens per completion.
+        for idx, count in delta_token_counts.items():
+            assert count == max_tokens, (
+                f"Completion {idx}: accumulated {count} tokens, expected {max_tokens}"
             )
 
 
