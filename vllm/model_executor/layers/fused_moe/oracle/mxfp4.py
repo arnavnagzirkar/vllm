@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 from enum import Enum
-from typing import TYPE_CHECKING, Literal, Union
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 import torch
 
@@ -26,6 +26,7 @@ from vllm.model_executor.layers.fused_moe.config import (
     mxfp4_w4a16_moe_quant_config,
     ocp_mx_moe_quant_config,
 )
+from vllm.model_executor.layers.fused_moe.oracle.base import MoEKernelOracle
 from vllm.model_executor.layers.quantization.utils.mxfp4_utils import _swizzle_mxfp4
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
     QuantKey,
@@ -1708,3 +1709,49 @@ def make_mxfp4_moe_kernel(
     )
 
     return kernel
+
+
+class MxFp4MoEKernelOracle(MoEKernelOracle):
+    """Oracle for MXFP4 MoE kernels."""
+
+    def select_moe_backend(
+        self,
+        config: FusedMoEConfig,
+        **kwargs,
+    ) -> tuple[Mxfp4MoeBackend, type[mk.FusedMoEExperts] | None]:
+        return select_mxfp4_moe_backend(config)
+
+    def convert_to_kernel_format(
+        self,
+        backend: Mxfp4MoeBackend,
+        layer,
+        **kwargs,
+    ) -> Any:
+        return convert_weight_to_mxfp4_moe_kernel_format(backend, layer, **kwargs)
+
+    def make_moe_quant_config(
+        self,
+        mxfp4_backend: Mxfp4MoeBackend,
+        **kwargs,
+    ) -> FusedMoEQuantConfig | None:
+        return make_mxfp4_moe_quant_config(mxfp4_backend, **kwargs)
+
+    def make_moe_kernel(
+        self,
+        moe_quant_config: FusedMoEQuantConfig,
+        moe_config: FusedMoEConfig,
+        experts_cls: type[mk.FusedMoEExperts],
+        mxfp4_backend: Mxfp4MoeBackend | None = None,
+        routing_tables: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        | None = None,
+        layer: "RoutedExperts | None" = None,
+        **kwargs,
+    ) -> mk.FusedMoEKernel:
+        return make_mxfp4_moe_kernel(
+            moe_quant_config,
+            moe_config,
+            experts_cls,
+            mxfp4_backend,
+            routing_tables,
+            layer,
+        )

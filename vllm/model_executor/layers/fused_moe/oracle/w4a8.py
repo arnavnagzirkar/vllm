@@ -15,6 +15,7 @@ from vllm.model_executor.layers.fused_moe.config import (
     FusedMoEQuantConfig,
     int4_w4afp8_moe_quant_config,
 )
+from vllm.model_executor.layers.fused_moe.oracle.base import MoEKernelOracle
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
     QuantKey,
     kFp8DynamicTokenSym,
@@ -193,3 +194,63 @@ def make_w4a8_moe_kernel(
         prepare_finalize,
         experts,
     )
+
+
+class W4A8MoEKernelOracle(MoEKernelOracle):
+    """Oracle for W4A8 (INT4 weight, FP8 activation) MoE kernels."""
+
+    def select_moe_backend(
+        self,
+        config: FusedMoEConfig,
+        weight_key: QuantKey | None = kInt4Static,
+        activation_key: QuantKey | None = kFp8DynamicTokenSym,
+        **kwargs,
+    ) -> tuple[W4A8MoeBackend, "type[CutlassExpertsW4A8Fp8]"]:
+        return select_w4a8_moe_backend(config, weight_key, activation_key)
+
+    def convert_to_kernel_format(
+        self,
+        w13_weight_packed: torch.Tensor,
+        w2_weight_packed: torch.Tensor,
+        w13_weight_scale: torch.Tensor,
+        w2_weight_scale: torch.Tensor,
+        **kwargs,
+    ) -> tuple:
+        return convert_to_w4a8_moe_kernel_format(
+            w13_weight_packed,
+            w2_weight_packed,
+            w13_weight_scale,
+            w2_weight_scale,
+        )
+
+    def make_moe_quant_config(
+        self,
+        w1_scale: torch.Tensor,
+        w2_scale: torch.Tensor,
+        g1_alphas: torch.Tensor,
+        g2_alphas: torch.Tensor,
+        **kwargs,
+    ) -> FusedMoEQuantConfig:
+        return make_w4a8_moe_quant_config(w1_scale, w2_scale, g1_alphas, g2_alphas)
+
+    def make_moe_kernel(
+        self,
+        moe_quant_config: FusedMoEQuantConfig,
+        moe_config: FusedMoEConfig,
+        experts_cls: "type[CutlassExpertsW4A8Fp8]",
+        b_strides1: torch.Tensor | None = None,
+        b_strides2: torch.Tensor | None = None,
+        group_size: int = 0,
+        routing_tables: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        | None = None,
+        **kwargs,
+    ) -> mk.FusedMoEKernel:
+        return make_w4a8_moe_kernel(
+            moe_quant_config,
+            moe_config,
+            experts_cls,
+            b_strides1,
+            b_strides2,
+            group_size,
+            routing_tables,
+        )

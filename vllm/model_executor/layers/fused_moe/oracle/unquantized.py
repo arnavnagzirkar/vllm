@@ -18,6 +18,7 @@ from vllm.model_executor.layers.fused_moe.config import (
     FusedMoEConfig,
     FusedMoEQuantConfig,
 )
+from vllm.model_executor.layers.fused_moe.oracle.base import MoEKernelOracle
 from vllm.model_executor.layers.quantization.utils.flashinfer_utils import (
     FlashinferMoeBackend,
     convert_moe_weights_to_flashinfer_trtllm_block_layout,
@@ -362,3 +363,40 @@ def make_unquantized_moe_kernel(
     )
 
     return kernel
+
+
+class UnquantizedMoEKernelOracle(MoEKernelOracle):
+    """Oracle for unquantized (BF16/FP16) MoE kernels."""
+
+    def select_moe_backend(
+        self,
+        config: FusedMoEConfig,
+        **kwargs,
+    ) -> tuple[UnquantizedMoeBackend, type[mk.FusedMoEExperts] | None]:
+        return select_unquantized_moe_backend(config)
+
+    def convert_to_kernel_format(
+        self,
+        unquantized_backend: UnquantizedMoeBackend,
+        layer: Module,
+        w13_weight: torch.Tensor,
+        w2_weight: torch.Tensor,
+        **kwargs,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return convert_to_unquantized_kernel_format(
+            unquantized_backend, layer, w13_weight, w2_weight
+        )
+
+    def make_moe_kernel(
+        self,
+        moe_quant_config: FusedMoEQuantConfig,
+        moe_config: FusedMoEConfig,
+        experts_cls: type[mk.FusedMoEExperts],
+        backend: UnquantizedMoeBackend | None = None,
+        routing_tables: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        | None = None,
+        **kwargs,
+    ) -> mk.FusedMoEKernel:
+        return make_unquantized_moe_kernel(
+            moe_quant_config, moe_config, backend, experts_cls, routing_tables
+        )

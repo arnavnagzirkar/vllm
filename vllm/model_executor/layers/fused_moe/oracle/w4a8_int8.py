@@ -16,6 +16,7 @@ from vllm.model_executor.layers.fused_moe.config import (
     FusedMoEQuantConfig,
     FusedMoEQuantDesc,
 )
+from vllm.model_executor.layers.fused_moe.oracle.base import MoEKernelOracle
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
     GroupShape,
     QuantKey,
@@ -358,3 +359,57 @@ def make_w4a8_int8_moe_kernel(
     )
 
     return kernel
+
+
+class W4A8Int8MoEKernelOracle(MoEKernelOracle):
+    """Oracle for W4A8 INT8 (INT4 weight, INT8 activation) MoE kernels."""
+
+    def select_moe_backend(
+        self,
+        config: FusedMoEConfig,
+        weight_key: QuantKey | None = None,
+        activation_key: QuantKey | None = None,
+        **kwargs,
+    ) -> tuple[W4A8Int8MoeBackend, type[mk.FusedMoEExperts]]:
+        return select_w4a8_int8_moe_backend(config, weight_key, activation_key)
+
+    def convert_to_kernel_format(
+        self,
+        w13_weight: torch.Tensor,
+        w2_weight: torch.Tensor,
+        w13_weight_scale: torch.Tensor,
+        w2_weight_scale: torch.Tensor,
+        group_size: int,
+        w13_bias: torch.Tensor | None = None,
+        w2_bias: torch.Tensor | None = None,
+        **kwargs,
+    ) -> tuple:
+        return convert_to_w4a8_int8_moe_format(
+            w13_weight,
+            w2_weight,
+            w13_weight_scale,
+            w2_weight_scale,
+            group_size,
+            w13_bias,
+            w2_bias,
+        )
+
+    def make_moe_quant_config(
+        self,
+        block_shape: tuple[int, int] | None = None,
+        **kwargs,
+    ) -> FusedMoEQuantConfig:
+        return make_w4a8_int8_moe_quant_config(block_shape)
+
+    def make_moe_kernel(
+        self,
+        moe_quant_config: FusedMoEQuantConfig,
+        moe_config: FusedMoEConfig,
+        experts_cls: type[mk.FusedMoEExperts],
+        routing_tables: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        | None = None,
+        **kwargs,
+    ) -> mk.FusedMoEKernel:
+        return make_w4a8_int8_moe_kernel(
+            moe_quant_config, moe_config, experts_cls, routing_tables
+        )

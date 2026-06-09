@@ -18,6 +18,7 @@ from vllm.model_executor.layers.fused_moe.config import (
     fp8_w8a8_moe_quant_config,
     fp8_w8a16_moe_quant_config,
 )
+from vllm.model_executor.layers.fused_moe.oracle.base import MoEKernelOracle
 from vllm.model_executor.layers.quantization.utils.flashinfer_utils import (
     FlashinferMoeBackend,
     get_flashinfer_moe_backend,
@@ -632,3 +633,89 @@ def make_fp8_moe_kernel(
     )
 
     return kernel
+
+
+class Fp8MoEKernelOracle(MoEKernelOracle):
+    """Oracle for FP8 MoE kernels."""
+
+    def select_moe_backend(
+        self,
+        config: FusedMoEConfig,
+        weight_key: QuantKey | None = None,
+        activation_key: QuantKey | None = None,
+        allow_vllm_cutlass: bool = False,
+        **kwargs,
+    ) -> tuple[Fp8MoeBackend, type[mk.FusedMoEExperts] | None]:
+        return select_fp8_moe_backend(
+            config, weight_key, activation_key, allow_vllm_cutlass
+        )
+
+    def convert_to_kernel_format(
+        self,
+        fp8_backend: Fp8MoeBackend,
+        layer,
+        w13: torch.Tensor,
+        w2: torch.Tensor,
+        w13_scale: torch.Tensor,
+        w2_scale: torch.Tensor,
+        w13_input_scale: torch.Tensor | None = None,
+        w2_input_scale: torch.Tensor | None = None,
+        **kwargs,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        return convert_to_fp8_moe_kernel_format(
+            fp8_backend,
+            layer,
+            w13,
+            w2,
+            w13_scale,
+            w2_scale,
+            w13_input_scale,
+            w2_input_scale,
+        )
+
+    def make_moe_quant_config(
+        self,
+        fp8_backend: Fp8MoeBackend,
+        w1_scale: torch.Tensor,
+        w2_scale: torch.Tensor,
+        a1_scale: torch.Tensor | None = None,
+        a2_scale: torch.Tensor | None = None,
+        w1_bias: torch.Tensor | None = None,
+        w2_bias: torch.Tensor | None = None,
+        block_shape: list[int] | None = None,
+        per_act_token_quant: bool = False,
+        per_out_ch_quant: bool = False,
+        swiglu_limit: float | None = None,
+        **kwargs,
+    ) -> FusedMoEQuantConfig:
+        return make_fp8_moe_quant_config(
+            fp8_backend,
+            w1_scale,
+            w2_scale,
+            a1_scale,
+            a2_scale,
+            w1_bias,
+            w2_bias,
+            block_shape,
+            per_act_token_quant,
+            per_out_ch_quant,
+            swiglu_limit,
+        )
+
+    def make_moe_kernel(
+        self,
+        moe_quant_config: FusedMoEQuantConfig,
+        moe_config: FusedMoEConfig,
+        experts_cls: type[mk.FusedMoEExperts],
+        fp8_backend: Fp8MoeBackend | None = None,
+        routing_tables: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        | None = None,
+        **kwargs,
+    ) -> mk.FusedMoEKernel:
+        return make_fp8_moe_kernel(
+            moe_quant_config,
+            moe_config,
+            experts_cls,
+            fp8_backend,
+            routing_tables,
+        )

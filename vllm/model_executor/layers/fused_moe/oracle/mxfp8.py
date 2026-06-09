@@ -6,6 +6,7 @@ from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe.config import FusedMoEConfig
 from vllm.model_executor.layers.fused_moe.oracle.fp8 import (
     Fp8MoeBackend,
+    Fp8MoEKernelOracle,
     backend_to_kernel_cls,
 )
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
@@ -89,3 +90,19 @@ def select_mxfp8_moe_backend(
         return backend, experts_cls
 
     raise ValueError("No MXFP8 MoE backends available.")
+
+
+class MxFp8MoEKernelOracle(Fp8MoEKernelOracle):
+    """Oracle for MXFP8 MoE kernels.
+
+    MXFP8 is a specialisation of FP8 that uses microscaling block quantization
+    (block_size=32).  Backend selection uses MXFP8-specific logic; all other
+    oracle operations are inherited from :class:`Fp8MoEKernelOracle`.
+    """
+
+    def select_moe_backend(
+        self,
+        config: FusedMoEConfig,
+        **kwargs,
+    ) -> tuple[Fp8MoeBackend, type[mk.FusedMoEExperts]]:
+        return select_mxfp8_moe_backend(config)

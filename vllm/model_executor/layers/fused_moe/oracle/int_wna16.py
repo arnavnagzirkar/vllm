@@ -26,6 +26,7 @@ from vllm.model_executor.layers.fused_moe.experts.marlin_moe import (
 from vllm.model_executor.layers.fused_moe.experts.trtllm_mxint4_moe import (
     TrtLlmMxint4ExpertsMonolithic,
 )
+from vllm.model_executor.layers.fused_moe.oracle.base import MoEKernelOracle
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 from vllm.model_executor.layers.quantization.utils.marlin_utils import (
     marlin_act_int8_process_scales,
@@ -888,3 +889,62 @@ def convert_to_wna16_moe_kernel_format(
         )
     else:
         raise ValueError(f"Unsupported wna16 MoE backend: {backend.value}")
+
+
+class WNA16MoEKernelOracle(MoEKernelOracle):
+    """Oracle for WNA16 (W4A16 / W8A16) MoE kernels."""
+
+    def select_moe_backend(
+        self,
+        config: FusedMoEConfig,
+        weight_key: QuantKey | None = None,
+        **kwargs,
+    ) -> tuple[WNA16MoEBackend, type[mk.FusedMoEExperts]]:
+        return select_wna16_moe_backend(config, weight_key)
+
+    def convert_to_kernel_format(
+        self,
+        backend: WNA16MoEBackend,
+        layer,
+        quant_config,
+        input_dtype,
+        w13: torch.Tensor,
+        w2: torch.Tensor,
+        w13_scale: torch.Tensor,
+        w2_scale: torch.Tensor,
+        **kwargs,
+    ) -> tuple:
+        return convert_to_wna16_moe_kernel_format(
+            backend,
+            layer,
+            quant_config,
+            input_dtype,
+            w13,
+            w2,
+            w13_scale,
+            w2_scale,
+            **kwargs,
+        )
+
+    def make_moe_quant_config(
+        self,
+        w1_scale: torch.Tensor,
+        w2_scale: torch.Tensor,
+        group_size: int,
+        num_bits: int,
+        **kwargs,
+    ) -> FusedMoEQuantConfig:
+        return make_wna16_moe_quant_config(
+            w1_scale, w2_scale, group_size, num_bits, **kwargs
+        )
+
+    def make_moe_kernel(
+        self,
+        moe_quant_config: FusedMoEQuantConfig,
+        moe_config: FusedMoEConfig,
+        experts_cls: type[mk.FusedMoEExperts],
+        **kwargs,
+    ) -> mk.FusedMoEKernel:
+        return make_wna16_moe_kernel(
+            moe_quant_config, moe_config, experts_cls, **kwargs
+        )
