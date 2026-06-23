@@ -619,10 +619,13 @@ VLM_TEST_SETTINGS = {
         max_model_len=4096,
         use_tokenizer_eos=True,
         patch_hf_runner=model_utils.internvl_patch_hf_runner,
-        # TODO: Remove skip once model has been upstreamed to Transformers
         marks=[
-            pytest.mark.skip(
-                reason="Custom model code tries to access data from meta-tensor"
+            pytest.mark.skipif(
+                Version(TRANSFORMERS_VERSION) >= Version("5.0.0"),
+                reason=(
+                    "Custom model code calls Tensor.item() during model "
+                    "construction which fails on meta tensors in Transformers v5"
+                ),
             )
         ],
     ),
@@ -637,10 +640,13 @@ VLM_TEST_SETTINGS = {
         use_tokenizer_eos=True,
         patch_hf_runner=model_utils.internvl_patch_hf_runner,
         num_logprobs=10 if current_platform.is_rocm() else 5,
-        # TODO: Remove skip once model has been upstreamed to Transformers
         marks=[
-            pytest.mark.skip(
-                reason="Custom model code tries to access data from meta-tensor"
+            pytest.mark.skipif(
+                Version(TRANSFORMERS_VERSION) >= Version("5.0.0"),
+                reason=(
+                    "Custom model code calls Tensor.item() during model "
+                    "construction which fails on meta tensors in Transformers v5"
+                ),
             )
         ],
     ),
@@ -1102,10 +1108,13 @@ VLM_TEST_SETTINGS = {
             )
             for inp in custom_inputs.different_patch_input_cases_internvl()
         ],
-        # TODO: Remove skip once model has been upstreamed to Transformers
         marks=[
-            pytest.mark.skip(
-                reason="Custom model code tries to access data from meta-tensor"
+            pytest.mark.skipif(
+                Version(TRANSFORMERS_VERSION) >= Version("5.0.0"),
+                reason=(
+                    "Custom model code calls Tensor.item() during model "
+                    "construction which fails on meta tensors in Transformers v5"
+                ),
             )
         ],
     ),

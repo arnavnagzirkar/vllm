@@ -1011,6 +1011,13 @@ _MULTIMODAL_EXAMPLE_MODELS = {
             "3.5-gptoss": "OpenGVLab/InternVL3_5-GPT-OSS-20B-A4B-Preview",
         },
         trust_remote_code=True,
+        max_transformers_version="4.57",
+        transformers_version_reason={
+            "hf": (
+                "Custom model code calls Tensor.item() during model "
+                "construction which fails on meta tensors in Transformers v5"
+            )
+        },
     ),
     "InternVLForConditionalGeneration": _HfExamplesInfo("OpenGVLab/InternVL3-1B-hf"),
     "KananaVForConditionalGeneration": _HfExamplesInfo(
